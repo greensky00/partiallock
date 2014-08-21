@@ -76,7 +76,8 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
     le = list_begin(&plock->active);
     while (le) {
         node = _get_entry(le, struct plock_node, le);
-        if (plock->ops->is_overlapped(node->start, node->len, start, len, NULL)) {
+        if (plock->ops->is_overlapped(node->start, node->len,
+                                      start, len, plock->aux)) {
             // overlapped
             // increase waiting count
             node->wcount++;
