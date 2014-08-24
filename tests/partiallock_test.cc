@@ -98,6 +98,8 @@ void* static_worker(void *voidargs)
         }
         plock_unlock(args->plock, plock_entry);
     }
+
+    return NULL;
 }
 
 void static_test()

@@ -96,6 +96,8 @@ void* worker_normal(void *voidargs)
         assert(args->data[pos] == args->data[pos+1]);
         spin_unlock(args->spinlock);
     }
+
+    return NULL;
 }
 
 void* worker_plock(void *voidargs)
@@ -113,6 +115,8 @@ void* worker_plock(void *voidargs)
         assert(args->data[pos] == args->data[pos+1]);
         plock_unlock(args->plock, plock_entry);
     }
+
+    return NULL;
 }
 
 static struct timeval _utime_gap(struct timeval a, struct timeval b)
