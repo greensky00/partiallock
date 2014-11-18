@@ -43,21 +43,18 @@ struct plock_node {
     struct list_elem le;
 };
 
-void plock_init(struct plock *plock,
-                struct plock_ops *ops,
-                size_t sizeof_lock,
-                size_t sizeof_range,
-                void *aux)
+void plock_init(struct plock *plock, struct plock_config *config)
 {
     plock->ops = (struct plock_ops *)malloc(sizeof(struct plock_ops));
-    *plock->ops = *ops;
+    *plock->ops = *(config->ops);
 
     // allocate and init lock
-    plock->sizeof_lock = sizeof_lock;
-    plock->sizeof_range = sizeof_range;
-    plock->aux = aux;
-    plock->lock = (void *)malloc(plock->sizeof_lock);
-    plock->ops->init(plock->lock);
+    plock->sizeof_lock_user = config->sizeof_lock_user;
+    plock->sizeof_lock_internal = config->sizeof_lock_internal;
+    plock->sizeof_range = config->sizeof_range;
+    plock->aux = config->aux;
+    plock->lock = (void *)malloc(plock->sizeof_lock_internal);
+    plock->ops->init_internal(plock->lock);
 
     // init list and tree
     list_init(&plock->active);
@@ -70,7 +67,7 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
     struct plock_node *node = NULL;
 
     // grab plock's lock
-    plock->ops->lock(plock->lock);
+    plock->ops->lock_internal(plock->lock);
 
     // find existing overlapped lock
     le = list_begin(&plock->active);
@@ -82,13 +79,13 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
             // increase waiting count
             node->wcount++;
             // release plock's lock
-            plock->ops->unlock(plock->lock);
+            plock->ops->unlock_internal(plock->lock);
 
             // grab node's lock
-            plock->ops->lock(node->lock);
+            plock->ops->lock_user(node->lock);
             // got control .. that means the owner released the lock
             // grab plock's lock
-            plock->ops->lock(plock->lock);
+            plock->ops->lock_internal(plock->lock);
             // decrease waiting count
             le = list_next(&node->le);
             node->wcount--;
@@ -99,7 +96,7 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
                 list_push_front(&plock->inactive, &node->le);
             }
             // release node's lock
-            plock->ops->unlock(node->lock);
+            plock->ops->unlock_user(node->lock);
         } else {
             le = list_next(le);
         }
@@ -110,8 +107,8 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
     if (le == NULL) {
         // no free lock .. create one
         node = (struct plock_node *)malloc(sizeof(struct plock_node));
-        node->lock = (void *)malloc(plock->sizeof_lock);
-        plock->ops->init(node->lock);
+        node->lock = (void *)malloc(plock->sizeof_lock_user);
+        plock->ops->init_user(node->lock);
         node->start = (void *)malloc(plock->sizeof_range);
         node->len = (void *)malloc(plock->sizeof_range);
     } else {
@@ -126,8 +123,8 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
     list_push_back(&plock->active, &node->le);
 
     // grab node's lock & release plock's lock
-    plock->ops->lock(node->lock);
-    plock->ops->unlock(plock->lock);
+    plock->ops->lock_user(node->lock);
+    plock->ops->unlock_internal(plock->lock);
 
     return node;
 }
@@ -138,7 +135,7 @@ void plock_unlock(struct plock *plock, plock_entry_t *plock_entry)
     struct plock_node *node = plock_entry;
 
     // grab plock's lock
-    plock->ops->lock(plock->lock);
+    plock->ops->lock_internal(plock->lock);
 
     if (node->wcount == 0) {
         // no other thread refers this node
@@ -146,10 +143,10 @@ void plock_unlock(struct plock *plock, plock_entry_t *plock_entry)
         list_remove(&plock->active, &node->le);
         list_push_front(&plock->inactive, &node->le);
     }
-    plock->ops->unlock(node->lock);
+    plock->ops->unlock_user(node->lock);
 
     // release plock's lock
-    plock->ops->unlock(plock->lock);
+    plock->ops->unlock_internal(plock->lock);
 }
 
 void plock_destroy(struct plock *plock)
@@ -157,7 +154,7 @@ void plock_destroy(struct plock *plock)
     struct list_elem *le;
     struct plock_node *node;
 
-    plock->ops->destroy(plock->lock);
+    plock->ops->destroy_internal(plock->lock);
 
     // free all active locks
     le = list_begin(&plock->active);
@@ -166,8 +163,8 @@ void plock_destroy(struct plock *plock)
         le = list_next(le);
 
         // unlock and destroy
-        plock->ops->unlock(node->lock);
-        plock->ops->destroy(node->lock);
+        plock->ops->unlock_user(node->lock);
+        plock->ops->destroy_user(node->lock);
         free(node->start);
         free(node->len);
         free(node->lock);
@@ -181,7 +178,7 @@ void plock_destroy(struct plock *plock)
         le = list_next(le);
 
         // destroy
-        plock->ops->destroy(node->lock);
+        plock->ops->destroy_user(node->lock);
         free(node->start);
         free(node->len);
         free(node->lock);

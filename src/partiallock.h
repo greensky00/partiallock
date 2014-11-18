@@ -45,28 +45,37 @@ typedef uint64_t plock_range_t;
 typedef struct plock_node plock_entry_t; /* opaque reference */
 
 struct plock_ops {
-    void (*init)(void *lock);
-    void (*lock)(void *lock);
-    void (*unlock)(void *lock);
-    void (*destroy)(void *lock);
+    void (*init_user)(void *lock);
+    void (*lock_user)(void *lock);
+    void (*unlock_user)(void *lock);
+    void (*destroy_user)(void *lock);
+    void (*init_internal)(void *lock);
+    void (*lock_internal)(void *lock);
+    void (*unlock_internal)(void *lock);
+    void (*destroy_internal)(void *lock);
     int (*is_overlapped)(void *start1, void *len1, void *start2, void *len2, void *aux);
+};
+
+struct plock_config {
+    struct plock_ops *ops;
+    size_t sizeof_lock_user;
+    size_t sizeof_lock_internal;
+    size_t sizeof_range;
+    void *aux;
 };
 
 struct plock {
     struct list active; /* list of active locks */
     struct list inactive; /* list of inactive (freed) locks */
     struct plock_ops *ops;
-    size_t sizeof_lock;
+    size_t sizeof_lock_user;
+    size_t sizeof_lock_internal;
     size_t sizeof_range;
     void *lock;
     void *aux;
 };
 
-void plock_init(struct plock *plock,
-                struct plock_ops *ops,
-                size_t sizeof_lock,
-                size_t sizeof_range,
-                void *aux);
+void plock_init(struct plock *plock, struct plock_config *config);
 plock_entry_t *plock_lock(struct plock *plock, void *start, void *len);
 void plock_unlock(struct plock *plock, plock_entry_t *plock_entry);
 void plock_destroy(struct plock *plock);

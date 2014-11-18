@@ -34,7 +34,6 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include <string.h>
 #include <unistd.h>
 #include <assert.h>
-#include <sys/time.h>
 
 #include "partiallock.h"
 #include "arch.h"
@@ -80,90 +79,83 @@ static int _int_is_overlapped(void *pstart1, void *plen1,
     start2 = *(uint64_t*)pstart2;
     len2 = *(uint64_t*)plen2;
 
-    if ((start1 + len1 > start2 && start2 >= start1) ||
-        (start2 + len2 > start1 && start1 >= start2)) {
-        // overlapped
-        return 1;
-    } else {
+    if (start1 != start2) {
         return 0;
+    } else {
+        if (len1 == 0 && len2 == 0) {
+            // both are readers
+            return 0;
+        } else {
+            return 1;
+        }
     }
 }
 
-struct args {
+struct sw_args {
     int wid;
     int n;
-    uint64_t *data;
-    size_t len;
+    int *array;
+    uint64_t array_size;
+    uint64_t chunk_size;
     struct plock *plock;
-    mutex_t *lock;
 };
 
-static void* worker_normal(void *voidargs)
+static void* static_worker(void *voidargs)
 {
-    int i, j;
-    uint64_t pos;
+    int i, j, idx;
+    uint64_t r, rr;
+    uint64_t is_writer;
     plock_entry_t *plock_entry;
-    struct args *args = (struct args *)voidargs;
+    char prefix[256];
+    struct sw_args *args = (struct sw_args *)voidargs;
 
-    for (i=0;i<args->n;++i){
-        pos = rand() % (args->len-1);
-        mutex_lock(args->lock);
-        args->data[pos] = args->data[pos+1] = (uint64_t)args->wid;
-        usleep(1);
-        assert(args->data[pos] == args->data[pos+1]);
-        mutex_unlock(args->lock);
+    if (args->wid == 0) {
+        is_writer = 1;
+    } else {
+        is_writer = 0;
     }
+    memset(prefix, ' ', 256);
+    prefix[args->wid] = 0;
 
-    return NULL;
-}
+    for (i=0;i<args->n;++i) {
+        r = rand() % args->array_size;
+        rr = rand() % 256;
+        plock_entry = plock_lock(args->plock, &r, &is_writer);
 
-static void* worker_plock(void *voidargs)
-{
-    int i, j;
-    uint64_t pos, len=2;
-    plock_entry_t *plock_entry;
-    struct args *args = (struct args *)voidargs;
-
-    for (i=0;i<args->n;++i){
-        pos = rand() % (args->len-1);
-        plock_entry = plock_lock(args->plock, &pos, &len);
-        args->data[pos] = args->data[pos+1] = (uint64_t)args->wid;
-        usleep(1);
-        assert(args->data[pos] == args->data[pos+1]);
+        if (is_writer) {
+            // set
+            for (j=0; j<args->chunk_size; ++j){
+                idx = r*args->chunk_size + j;
+                args->array[idx] = rr;
+            }
+        } else {
+            // integrity check
+            idx = r*args->chunk_size;
+            for (j=1; j<args->chunk_size; ++j){
+                idx = r*args->chunk_size + j;
+                assert(args->array[idx] == args->array[idx-1]);
+            }
+        }
         plock_unlock(args->plock, plock_entry);
     }
 
     return NULL;
 }
 
-static struct timeval _utime_gap(struct timeval a, struct timeval b)
-{
-    struct timeval ret;
-    if (b.tv_usec >= a.tv_usec) {
-        ret.tv_usec = b.tv_usec - a.tv_usec;
-        ret.tv_sec = b.tv_sec - a.tv_sec;
-    }else{
-        ret.tv_usec = 1000000 + b.tv_usec - a.tv_usec;
-        ret.tv_sec = b.tv_sec - a.tv_sec - 1;
-    }
-    return ret;
-}
-
-void do_bench()
+void static_test()
 {
     int nthreads = 8;
-    int nitrs = 10000;
-    int len = 256;
+    int nitrs = 100000;
     int i;
-    uint64_t *data = (uint64_t *)alloca(sizeof(uint64_t) * len);
+    int array_size = 2;
+    int chunk_size = 256;
+    int *array = (int *)alloca(sizeof(int) * array_size * chunk_size);
     thread_t *tid = (thread_t*)alloca(sizeof(thread_t) * nthreads);
     void *ret;
-    mutex_t mutex;
-    struct args *args = (struct args*)alloca(sizeof(struct args) * nthreads);
+    struct sw_args *args = (struct sw_args*)alloca(sizeof(struct sw_args) * nthreads);
     struct plock plock;
     struct plock_ops ops;
     struct plock_config config;
-    struct timeval begin, end, gap;
 
     ops = (struct plock_ops){mutex_init_wrap,
                              mutex_lock_wrap,
@@ -182,46 +174,28 @@ void do_bench()
     config.sizeof_range = sizeof(uint64_t);
     config.aux = NULL;
     plock_init(&plock, &config);
-    mutex_init(&mutex);
 
-    gettimeofday(&begin, NULL);
-    for (i=0;i<nthreads;++i) {
-        args[i].wid = i;
-        args[i].plock = &plock;
-        args[i].lock = &mutex;
-        args[i].n = nitrs;
-        args[i].data = data;
-        args[i].len = len;
-        thread_create(&tid[i], worker_normal, &args[i]);
-    }
-    for (i=0;i<nthreads;++i){
-        thread_join(tid[i], &ret);
-    }
-    gettimeofday(&end, NULL);
-    gap = _utime_gap(begin, end);
-    printf("%d.%06d\n", (int)gap.tv_sec, (int)gap.tv_usec);
-
-    gettimeofday(&begin, NULL);
+    memset(array, 0x0, sizeof(int) * array_size * chunk_size);
     for (i=0;i<nthreads;++i) {
         args[i].wid = i;
         args[i].plock = &plock;
         args[i].n = nitrs;
-        args[i].data = data;
-        args[i].len = len;
-        thread_create(&tid[i], worker_plock, &args[i]);
+        args[i].array = array;
+        args[i].array_size = array_size;
+        args[i].chunk_size = chunk_size;
+        thread_create(&tid[i], static_worker, &args[i]);
     }
     for (i=0;i<nthreads;++i){
         thread_join(tid[i], &ret);
     }
-    gettimeofday(&end, NULL);
-    gap = _utime_gap(begin, end);
-    printf("%d.%06d\n", (int)gap.tv_sec, (int)gap.tv_usec);
 
     plock_destroy(&plock);
+
+    printf("passed\n");
 }
 
 int main(){
-    do_bench();
+    static_test();
     return 0;
 }
 

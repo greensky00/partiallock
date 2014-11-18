@@ -30,30 +30,48 @@ OTHER DEALINGS IN THE SOFTWARE.
 */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <assert.h>
 
 #include "partiallock.h"
 #include "arch.h"
 
-void spin_init_wrap(void *lock) {
+static void spin_init_wrap(void *lock) {
     spin_init((spin_t*)lock);
 }
 
-void spin_destroy_wrap(void *lock) {
+static void spin_destroy_wrap(void *lock) {
     spin_destroy((spin_t*)lock);
 }
 
-void spin_lock_wrap(void *lock) {
+static void spin_lock_wrap(void *lock) {
     spin_lock((spin_t*)lock);
 }
 
-void spin_unlock_wrap(void *lock) {
+static void spin_unlock_wrap(void *lock) {
     spin_unlock((spin_t*)lock);
 }
 
-int _int_is_overlapped(void *pstart1, void *plen1,
-                       void *pstart2, void *plen2, void *aux)
+static void mutex_init_wrap(void *lock) {
+    mutex_init((mutex_t*)lock);
+}
+
+static void mutex_destroy_wrap(void *lock) {
+    mutex_destroy((mutex_t*)lock);
+}
+
+static void mutex_lock_wrap(void *lock) {
+    mutex_lock((mutex_t*)lock);
+}
+
+static void mutex_unlock_wrap(void *lock) {
+    mutex_unlock((mutex_t*)lock);
+}
+
+static int _int_is_overlapped(void *pstart1, void *plen1,
+                              void *pstart2, void *plen2, void *aux)
 {
     uint64_t start1, len1, start2, len2;
     start1 = *(uint64_t*)pstart1;
@@ -79,7 +97,7 @@ struct sw_args {
     struct plock *plock;
 };
 
-void* static_worker(void *voidargs)
+static void* static_worker(void *voidargs)
 {
     int i, j;
     plock_entry_t *plock_entry;
@@ -113,14 +131,25 @@ void static_test()
     struct sw_args *args = (struct sw_args*)alloca(sizeof(struct sw_args) * nthreads);
     struct plock plock;
     struct plock_ops ops;
+    struct plock_config config;
 
-    ops = (struct plock_ops){spin_init_wrap,
+    ops = (struct plock_ops){mutex_init_wrap,
+                             mutex_lock_wrap,
+                             mutex_unlock_wrap,
+                             mutex_destroy_wrap,
+                             spin_init_wrap,
                              spin_lock_wrap,
                              spin_unlock_wrap,
                              spin_destroy_wrap,
                              _int_is_overlapped};
 
-    plock_init(&plock, &ops, sizeof(spin_t), sizeof(uint64_t), NULL);
+    memset(&config, 0x0, sizeof(config));
+    config.ops = &ops;
+    config.sizeof_lock_internal = sizeof(spin_t);
+    config.sizeof_lock_user = sizeof(mutex_t);
+    config.sizeof_range = sizeof(uint64_t);
+    config.aux = NULL;
+    plock_init(&plock, &config);
 
     for (i=0;i<nthreads;++i) {
         args[i].wid = i;
@@ -136,6 +165,8 @@ void static_test()
     }
 
     plock_destroy(&plock);
+
+    printf("passed\n");
 }
 
 int main(){
