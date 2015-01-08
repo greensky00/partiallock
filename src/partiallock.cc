@@ -5,7 +5,7 @@ A Generic Partial Lock
 Copyright (C) 2014  Jung-Sang Ahn <jungsang.ahn@gmail.com>
 All rights reserved.
 
-Last modification: Aug 20, 2014
+Last modification: Jan 8, 2015
 
 Permission is hereby granted, free of charge, to any person
 obtaining a copy of this software and associated documentation
@@ -39,13 +39,20 @@ struct plock_node {
     void *lock;
     void *start;
     void *len;
-    volatile uint32_t wcount; /* waiting count */
+    volatile uint32_t wcount; // waiting count
     struct list_elem le;
 };
 
-void plock_init(struct plock *plock, struct plock_config *config)
+int plock_init(struct plock *plock, struct plock_config *config)
 {
+    if (!plock || !config) {
+        return PLOCK_RESULT_INVALID_ARGS;
+    }
+
     plock->ops = (struct plock_ops *)malloc(sizeof(struct plock_ops));
+    if (!plock->ops) {
+        return PLOCK_RESULT_ALLOC_FAIL;
+    }
     *plock->ops = *(config->ops);
 
     // allocate and init lock
@@ -59,12 +66,18 @@ void plock_init(struct plock *plock, struct plock_config *config)
     // init list and tree
     list_init(&plock->active);
     list_init(&plock->inactive);
+
+    return PLOCK_RESULT_SUCCESS;
 }
 
 plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
 {
     struct list_elem *le = NULL;
     struct plock_node *node = NULL;
+
+    if (!plock || !start || !len) {
+        return NULL;
+    }
 
     // grab plock's lock
     plock->ops->lock_internal(plock->lock);
@@ -107,10 +120,19 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
     if (le == NULL) {
         // no free lock .. create one
         node = (struct plock_node *)malloc(sizeof(struct plock_node));
+        if (!node) {
+            plock->ops->unlock_internal(plock->lock);
+            return NULL;
+        }
         node->lock = (void *)malloc(plock->sizeof_lock_user);
         plock->ops->init_user(node->lock);
         node->start = (void *)malloc(plock->sizeof_range);
         node->len = (void *)malloc(plock->sizeof_range);
+        if (!node->lock || !node->start || !node->len) {
+            free(node);
+            plock->ops->unlock_internal(plock->lock);
+            return NULL;
+        }
     } else {
         node = _get_entry(le, struct plock_node ,le);
     }
@@ -129,10 +151,13 @@ plock_entry_t *plock_lock(struct plock *plock, void *start, void *len)
     return node;
 }
 
-void plock_unlock(struct plock *plock, plock_entry_t *plock_entry)
+int plock_unlock(struct plock *plock, plock_entry_t *plock_entry)
 {
-    struct list_elem *le = NULL;
     struct plock_node *node = plock_entry;
+
+    if (!plock || !plock_entry) {
+        return PLOCK_RESULT_INVALID_ARGS;
+    }
 
     // grab plock's lock
     plock->ops->lock_internal(plock->lock);
@@ -147,12 +172,18 @@ void plock_unlock(struct plock *plock, plock_entry_t *plock_entry)
 
     // release plock's lock
     plock->ops->unlock_internal(plock->lock);
+
+    return PLOCK_RESULT_SUCCESS;
 }
 
-void plock_destroy(struct plock *plock)
+int plock_destroy(struct plock *plock)
 {
     struct list_elem *le;
     struct plock_node *node;
+
+    if (!plock) {
+        return PLOCK_RESULT_INVALID_ARGS;
+    }
 
     plock->ops->destroy_internal(plock->lock);
 
@@ -188,5 +219,7 @@ void plock_destroy(struct plock *plock)
     // free plock
     free(plock->lock);
     free(plock->ops);
+
+    return PLOCK_RESULT_SUCCESS;
 }
 

@@ -5,7 +5,7 @@ A Generic Partial Lock
 Copyright (C) 2014  Jung-Sang Ahn <jungsang.ahn@gmail.com>
 All rights reserved.
 
-Last modification: Aug 20, 2014
+Last modification: Jan 8, 2015
 
 Permission is hereby granted, free of charge, to any person
 obtaining a copy of this software and associated documentation
@@ -42,7 +42,7 @@ extern "C" {
 #endif
 
 typedef uint64_t plock_range_t;
-typedef struct plock_node plock_entry_t; /* opaque reference */
+typedef struct plock_node plock_entry_t; // opaque reference
 
 struct plock_ops {
     void (*init_user)(void *lock);
@@ -65,8 +65,8 @@ struct plock_config {
 };
 
 struct plock {
-    struct list active; /* list of active locks */
-    struct list inactive; /* list of inactive (freed) locks */
+    struct list active; // list of active locks
+    struct list inactive; // list of inactive (freed) locks
     struct plock_ops *ops;
     size_t sizeof_lock_user;
     size_t sizeof_lock_internal;
@@ -75,10 +75,14 @@ struct plock {
     void *aux;
 };
 
-void plock_init(struct plock *plock, struct plock_config *config);
+#define PLOCK_RESULT_SUCCESS (0)
+#define PLOCK_RESULT_INVALID_ARGS (-1)
+#define PLOCK_RESULT_ALLOC_FAIL (-2)
+
+int plock_init(struct plock *plock, struct plock_config *config);
 plock_entry_t *plock_lock(struct plock *plock, void *start, void *len);
-void plock_unlock(struct plock *plock, plock_entry_t *plock_entry);
-void plock_destroy(struct plock *plock);
+int plock_unlock(struct plock *plock, plock_entry_t *plock_entry);
+int plock_destroy(struct plock *plock);
 
 #ifdef __cplusplus
 }
